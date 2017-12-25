@@ -3,6 +3,7 @@ import sys
 from decimal import getcontext
 
 import ccxt.async as ccxt
+from more_itertools import first
 
 from src.rate_table import RateTable
 
@@ -35,13 +36,22 @@ def main(argv):
                 if coin1 not in rates:
                     rates[coin1] = {}
 
-                rates[coin1][coin2] = data
+                if coin2 not in rates:
+                    rates[coin2] = {}
+
+                rates[coin1][coin2] = data["ask"]
+                rates[coin2][coin1] = data["bid"]
             await asyncio.sleep(1)
 
     async def simple_arbs(exchange_rates):
         while True:
-            diffs, percentages = exchange_rates.pairwiseDiffs("BTC", "USD")
+            diffs, percentages = exchange_rates.pairwise_diffs("BTC", "USD")
             print(percentages)
+            await asyncio.sleep(1)
+
+    async def complex_arbs(exchange_rates):
+        while True:
+            print(first(exchange_rates.best_conversions("USD", "LTC"), None))
             await asyncio.sleep(1)
 
     loop = asyncio.get_event_loop()
@@ -51,7 +61,8 @@ def main(argv):
             exchange_rates[exchange.name] = rates_on_exchange
             asyncio.ensure_future(populate_with_tickers(exchange, rates_on_exchange))
 
-    asyncio.ensure_future(simple_arbs(exchange_rates))
+    #asyncio.ensure_future(simple_arbs(exchange_rates))
+    asyncio.ensure_future(complex_arbs(exchange_rates))
     loop.run_forever()
 
 #        print (symbol, exchange.fetch_ohlcv (symbol, '1d')) # one day

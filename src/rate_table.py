@@ -1,8 +1,8 @@
 import collections
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from typing import Dict, Tuple
 
-from more_itertools import first, nth
+from more_itertools import nth
 
 
 class RateTable(collections.UserDict):
@@ -14,11 +14,20 @@ class RateTable(collections.UserDict):
 
     SYNONYMS.update({v: k for k, v in SYNONYMS.items()})
 
-    def pairwiseDiffs(self, from_cur, to_cur) -> Tuple[Dict, Dict]:
+    def get_pairs(self):
+        """Returns all currency pairs in this table."""
+        pairs = defaultdict(list)
+        for exchange in self.values():
+            for from_cur, marginal in exchange.items():
+                for to_cur in marginal.keys():
+                    pairs[from_cur].append(to_cur)
+        return pairs
+
+    def pairwise_diffs(self, from_cur, to_cur, snapshot=None) -> Tuple[Dict, Dict]:
         """Returns pairwise absolute and % differences between exchanges for a currency pair.
 
         Values represent profit from buying on the row, selling on the column."""
-        snapshot = self.copy()  # Prevent changes midway.
+        snapshot = snapshot or self.copy()  # Prevent changes midway.
         absdiffs = {}
         pctdiffs = {}
 
@@ -33,7 +42,7 @@ class RateTable(collections.UserDict):
                 if not e1pair or not e2pair:
                     continue
 
-                buyone = e2pair["bid"] - e1pair["ask"]
+                buyone = e2pair - e1pair
 
                 if exchange1 not in absdiffs:
                     absdiffs[exchange1] = {}
@@ -44,7 +53,7 @@ class RateTable(collections.UserDict):
                     pctdiffs[exchange2] = {}
 
                 absdiffs[exchange1][exchange2] = buyone
-                pctdiffs[exchange1][exchange2] = buyone / e1pair["ask"]
+                pctdiffs[exchange1][exchange2] = buyone / e1pair
 
             if exchange1 in absdiffs:
                 absdiffs[exchange1] = OrderedDict(
@@ -61,6 +70,37 @@ class RateTable(collections.UserDict):
                                       key=lambda x: nth(x[1].values(), 1, None) or float("-inf"),
                                       reverse=True))
         return absdiffs, pctdiffs
+
+    def best_conversions(self, from_cur, to_cur, max_steps=5):
+        """Find conversion from one currency to another across exchanges, sorted by profitability.
+
+        From_cur and to_cur can be the same currency - we'll look for profitable round trips.
+
+        Returns a list of pairs to trade.
+        """
+
+        def profitability(chain):
+            profit = 1.0
+            for trade in chain:
+                profit *= trade[-1]
+            return profit
+
+        conversions = self._all_conversions(from_cur, to_cur, [], 0, max_steps, self.copy())
+        return sorted(conversions, key=profitability, reverse=True)
+
+    def _all_conversions(self, from_cur, to_cur, trades, step, max_steps, snapshot):
+        if step >= max_steps or (from_cur == to_cur and trades):
+            return [trades]
+
+        solutions = []
+        for exchange_name, exchange in snapshot.items():
+            for next_cur, value in exchange.get(from_cur, {}).items():
+                if (exchange_name, from_cur, next_cur, value) in trades:
+                    continue
+                solutions += self._all_conversions(
+                    next_cur, to_cur, trades + [(exchange_name, from_cur, next_cur, value)],
+                    step + 1, max_steps, snapshot)
+        return solutions
 
     @staticmethod
     def _synget(snapshot, exchange, from_cur, to_cur):
