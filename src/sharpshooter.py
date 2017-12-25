@@ -20,7 +20,7 @@ def main(argv):
         ccxt.binance()
     }
 
-    ARBITRAGE_THRESHOLD_PCENT = 0.05
+    ARBITRAGE_THRESHOLD_PCENT = 0.02
 
     getcontext().prec = 8
     exchange_rates = RateTable()
@@ -30,7 +30,7 @@ def main(argv):
             tickers = await exchange.fetch_tickers()
             for pair, data in tickers.items():
                 coin1, coin2 = pair.split("/", 1)
-                if not coin1 or not coin2:
+                if not coin1 or not coin2 or not data["bid"] or not data["ask"]:
                     continue
 
                 if coin1 not in rates:
@@ -40,18 +40,27 @@ def main(argv):
                     rates[coin2] = {}
 
                 rates[coin1][coin2] = data["ask"]
-                rates[coin2][coin1] = data["bid"]
+                rates[coin2][coin1] = 1 / data["bid"]
             await asyncio.sleep(1)
 
     async def simple_arbs(exchange_rates):
         while True:
             diffs, percentages = exchange_rates.pairwise_diffs("BTC", "USD")
-            print(percentages)
+            print(diffs)
             await asyncio.sleep(1)
 
     async def complex_arbs(exchange_rates):
         while True:
-            print(first(exchange_rates.best_conversions("USD", "LTC"), None))
+            for index, best_conversion in enumerate(exchange_rates.best_conversions("USD", "USD")):
+                if index >= 5:
+                    break
+
+                profit = RateTable.profitability(best_conversion)
+                if profit < ARBITRAGE_THRESHOLD_PCENT:
+                    # It's sorted, all of the below will be worse.
+                    break
+                print(f"{best_conversion} for {profit * 100}% profit")
+            print()
             await asyncio.sleep(1)
 
     loop = asyncio.get_event_loop()

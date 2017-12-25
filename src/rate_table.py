@@ -71,7 +71,15 @@ class RateTable(collections.UserDict):
                                       reverse=True))
         return absdiffs, pctdiffs
 
-    def best_conversions(self, from_cur, to_cur, max_steps=5):
+    @staticmethod
+    def profitability(chain):
+        """Returns the profitability as a percentage of a given chain."""
+        profit = 1.0
+        for trade in chain or []:
+            profit *= trade[-1]
+        return profit - 1.0
+
+    def best_conversions(self, from_cur, to_cur, max_steps=4):
         """Find conversion from one currency to another across exchanges, sorted by profitability.
 
         From_cur and to_cur can be the same currency - we'll look for profitable round trips.
@@ -79,18 +87,15 @@ class RateTable(collections.UserDict):
         Returns a list of pairs to trade.
         """
 
-        def profitability(chain):
-            profit = 1.0
-            for trade in chain:
-                profit *= trade[-1]
-            return profit
-
         conversions = self._all_conversions(from_cur, to_cur, [], 0, max_steps, self.copy())
-        return sorted(conversions, key=profitability, reverse=True)
+        return sorted(conversions, key=RateTable.profitability, reverse=True)
 
     def _all_conversions(self, from_cur, to_cur, trades, step, max_steps, snapshot):
-        if step >= max_steps or (from_cur == to_cur and trades):
+        if from_cur == to_cur and trades:
             return [trades]
+
+        if step >= max_steps:
+            return []
 
         solutions = []
         for exchange_name, exchange in snapshot.items():
