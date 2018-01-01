@@ -119,17 +119,23 @@ class RateTable(collections.UserDict):
 
             for next_cur, book in itertools.chain(direct_pairs, syn_pairs):
                 value, limit, next_amount = self.get_market_price(book, amount)
+
                 if not value or (coins and next_cur not in coins):
                     continue
 
                 next_trade = Trade(exchange_name, from_cur, next_cur, next_amount, limit, value)
-                if next_trade in trades:
+                pair = next_trade.get_unique()
+                inv_pair = next_trade.get_unique_inv()
+                pairs = set(t.get_unique() for t in trades)
+                if pair in pairs or inv_pair in pairs:
+                    # Don't repeat the same trades in a single chain.
                     continue
 
                 solutions += self._all_conversions(
                     next_cur, to_cur, next_amount,
                     trades + [next_trade],
                     step + 1, max_steps, exchanges, coins, snapshot)
+
         return solutions
 
     @staticmethod
@@ -144,3 +150,6 @@ class RateTable(collections.UserDict):
 
         col = row.get(to_cur) or row.get(RateTable.SYNONYMS.get(to_cur))
         return col
+
+    def __str__(self):
+        super(RateTable, self).__str__()

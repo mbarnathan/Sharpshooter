@@ -27,3 +27,13 @@ class Trade(UserDict):
         for trade in trades:
             exchanges.add(trade["exchange"])
         return len(exchanges)
+
+    def get_unique(self):
+        """Get the unique elements of a trade."""
+        return self["exchange"], self["from_cur"], self["next_cur"]
+
+    def get_unique_inv(self):
+        return self["exchange"], self["next_cur"], self["from_cur"]
+
+    def __repr__(self):
+        return repr({k: f"{v:.8f}" if isinstance(v, float) else v for k, v in self.items()})

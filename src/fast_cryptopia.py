@@ -6,12 +6,15 @@ import time
 from ccxt.async import cryptopia
 
 
-class fast_cryptopia(cryptopia):
+class FastCryptopia(cryptopia):
+    REFRESH_SECONDS = 2
+
     def __init__(self, *args, **kwargs):
-        super(fast_cryptopia, self).__init__(*args, **kwargs)
+        super(FastCryptopia, self).__init__(*args, **kwargs)
         self._order_books = None
         self._fetching = asyncio.Event()
         self._last_fetch = 0
+        self.has["fetchOrderBooks"] = True
 
     @staticmethod
     def _convert_order_books(response):
@@ -22,9 +25,9 @@ class fast_cryptopia(cryptopia):
         return response
 
     async def fetch_order_book(self, symbol, params={}):
-        if not self._order_books: #or time.time() > self._last_fetch + 2:
+        if not self._order_books or time.time() > self._last_fetch + self.REFRESH_SECONDS:
             self._fetching.clear()
-            self._order_books = self._fetch_order_books(params)
+            self._order_books = self.fetch_order_books(params)
             self._order_books = await self._order_books
             self._last_fetch = time.time()
             self._fetching.set()
@@ -34,14 +37,14 @@ class fast_cryptopia(cryptopia):
         book = self.parse_order_book(orderbooks[symbol], None, 'Buy', 'Sell', 'Price', 'Volume')
         return book
 
-    async def _fetch_order_books(self, params):
+    async def fetch_order_books(self, params):
         await self.load_markets()
         symbols = [symbol.replace("/", "_") for symbol in self.symbols]
         result = {}
         for chunk in more_itertools.chunked(symbols, 1000):
             ids = "-".join(chunk)
             response = await self.publicGetMarketOrderGroupsIdsCount(self.extend({
-                'ids': ids, "count": 50
+                'ids': ids, "count": 55
             }, params))
             books = self._convert_order_books(response["Data"])
             result.update({data["Market"]: data for data in books})

@@ -6,7 +6,7 @@ from decimal import getcontext
 import ccxt.async as ccxt
 from ccxt import RequestTimeout, ExchangeError
 
-from src.fast_cryptopia import fast_cryptopia
+from src.fast_cryptopia import FastCryptopia
 from src.rate_table import RateTable
 from src.trade import Trade
 
@@ -20,9 +20,9 @@ def main(argv):
 #        ccxt.kraken({'enableRateLimit': True}),
 #        ccxt.poloniex({'enableRateLimit': True}),
 ##        ccxt.bitmex({'enableRateLimit': True}),
-        fast_cryptopia({'enableRateLimit': True}),
+        FastCryptopia({'enableRateLimit': True}),
 #        ccxt.gemini({'enableRateLimit': True}),
-#        ccxt.binance({'enableRateLimit': True})
+        ccxt.binance({'enableRateLimit': True})
     }
 
     BLACKLISTED = set([
@@ -69,9 +69,19 @@ def main(argv):
                          and symbol.split("/", 1)[1] not in BLACKLISTED]
 
                 logging.debug(f"Loading {len(pairs)} markets at {exchange}...")
-                books = [exchange.fetch_l2_order_book(symbol) for symbol in pairs]
-                books = await asyncio.gather(*books, return_exceptions=True)
-                books = {symbol: book for symbol, book in zip(pairs, books)}
+                if not exchange.hasFetchTickers \
+                        or len(pairs) <= 10 or exchange.has.get("fetchOrderBooks", False):
+                    books = [exchange.fetch_l2_order_book(symbol) for symbol in pairs]
+                    books = await asyncio.gather(*books, return_exceptions=True)
+                    books = {symbol: book for symbol, book in zip(pairs, books)}
+                else:
+                    books = await exchange.fetch_tickers()
+                    for pair in books.values():
+                        pair["bids"] = [(pair["bid"], pair["quoteVolume"]
+                                         or float(pair["info"].get("bidQty")) or float("inf"))]
+                        pair["asks"] = [(pair["ask"], pair["quoteVolume"]
+                                         or float(pair["info"].get("askQty")) or float("inf"))]
+                    print(books)
 
                 if not rates:
                     logging.info(f"Loaded {len(books)} markets at {exchange}.")
@@ -82,7 +92,7 @@ def main(argv):
                         if not coin1 or not coin2 or not data["bids"] or not data["asks"]:
                             continue
                     except TypeError as e:
-                        logging.warning(f"{e} when processing {pair}; data is {data}")
+                        # logging.warning(f"{e} when processing {pair}; data is {data}")
                         continue
 
                     if coin1 not in rates:
@@ -98,7 +108,7 @@ def main(argv):
                     # which means placing an order at the bid to get a fill.
                     # Going the other way entails buying at 1 / the ask in USD.
                     rates[coin1][coin2] = data["bids"]
-                    rates[coin2][coin1] = [(1 / ask, volume) for ask, volume in data["asks"]]
+                    rates[coin2][coin1] = [(1 / ask, ask * volume) for ask, volume in data["asks"]]
             except (TimeoutError, RequestTimeout, ExchangeError) as e:
                 logging.error(e)
 
@@ -112,7 +122,7 @@ def main(argv):
 
     async def complex_arbs(exchange_rates):
         while True:
-            roundtrips = exchange_rates.best_roundtrips("ETH", 10, max_steps=3)
+            roundtrips = exchange_rates.best_roundtrips("LTC", 10, max_steps=3)
             roundtrips = sorted(roundtrips, key=Trade.num_exchanges)
 
             for index, best_conversion in enumerate(roundtrips):
