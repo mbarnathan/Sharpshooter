@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import sys
-from decimal import getcontext
 
 import ccxt.async as ccxt
 from ccxt import RequestTimeout, ExchangeError
@@ -10,140 +9,99 @@ from src.fast_cryptopia import FastCryptopia
 from src.rate_table import RateTable
 from src.trade import Trade
 
+BLACKLISTED = set([
+    # Different coins, same name.
+    "BAT",
+    "FUEL",
+    "CMT",
 
-def main(argv):
-    logging.basicConfig(level=logging.DEBUG)
+    # Non-USD fiat.
+    "CAD",
+    "GBP",
+    "EUR",
+    "JPY",
+    "KRW",
+    "CNY",
+    "NZD",
+    "AUD"
+])
 
-    EXCHANGES = {
-#        ccxt.bittrex({'enableRateLimit': True}),
-#        ccxt.gdax({'enableRateLimit': True}),
-#        ccxt.kraken({'enableRateLimit': True}),
-#        ccxt.poloniex({'enableRateLimit': True}),
-##        ccxt.bitmex({'enableRateLimit': True}),
-        FastCryptopia({'enableRateLimit': True}),
-#        ccxt.gemini({'enableRateLimit': True}),
-        ccxt.binance({'enableRateLimit': True})
-    }
 
-    BLACKLISTED = set([
-        "BAT",  # Different coins, same name.
-        "FUEL",  # Different coins, same name.
-        
-        # Non-USD fiat.
-        "CAD",
-        "GBP",
-        "EUR",
-        "JPY",
-        "KRW",
-        "CNY",
-        "NZD",
-        "AUD"
-    ])
+class Sharpshooter:
+    def __init__(self, exchanges, starting_currency, blacklisted=None,
+                 arbitrage_threshold_pcent=0.025):
+        logging.basicConfig(level=logging.INFO)
+        self.blacklisted = blacklisted or BLACKLISTED
+        self.exchange_rates = RateTable()
+        self.exchanges = exchanges
+        self.starting_currency = starting_currency
+        self.arbitrage_threshold = arbitrage_threshold_pcent
 
-    ARBITRAGE_THRESHOLD_PCENT = 0.025
+    def run_forever(self):
+        loop = asyncio.get_event_loop()
+        for exchange in self.exchanges:
+            asyncio.ensure_future(self.populate_task(exchange))
+        asyncio.ensure_future(self.print_complex_arbs_task())
+        loop.run_forever()
 
-    getcontext().prec = 8
-    exchange_rates = RateTable()
+    def run_once(self):
+        populate = asyncio.ensure_future(
+            asyncio.gather(*[self.exchange_rates.populate(exchange, blacklisted=self.blacklisted)
+                             for exchange in self.exchanges]))
+        asyncio.get_event_loop().run_until_complete(populate)
+        return self.complex_arbs()
 
-    async def populate_with_tickers(exchange, rates):
-        logging.info(f"Initializing {exchange}...")
-        for attempt in range(5):
-            try:
-                await exchange.load_markets()
-                break
-            except RequestTimeout:
-                pass
+    def simple_arbs(self, from_cur, to_cur):
+        return self.exchange_rates.pairwise_diffs(from_cur, to_cur)
 
+    def complex_arbs(self):
+        currency, amount = self.starting_currency
+        logging.debug(f"Checking {currency} roundtrips...")
+        roundtrips = self.exchange_rates.best_roundtrips(currency, amount, max_steps=3)
+        roundtrips = sorted(roundtrips, key=Trade.num_exchanges)
+
+        profitable = 0
+        for index, best_conversion in enumerate(roundtrips):
+            profit = Trade.profitability(best_conversion)
+            if profit < self.arbitrage_threshold:
+                continue
+
+            profitable += 1
+            yield (best_conversion, profit)
+
+        logging.debug(f"Found {len(roundtrips)} {currency} roundtrips, "
+                      f"{profitable} above the profit threshold")
+
+    @staticmethod
+    def print_arbs(arbs):
+        for best_conversion, profit in arbs:
+            print(f"{best_conversion} for {profit * 100}% profit")
+
+    async def print_complex_arbs_task(self):
+        while True:
+            self.print_arbs(self.complex_arbs())
+            await asyncio.sleep(1)
+
+    async def populate_task(self, exchange):
         while True:
             try:
-                #if exchange.hasFetchTickers:
-                #    tickers = await exchange.fetch_tickers()
-                #else:
-                #    tickers = [exchange.fetch_ticker(symbol) for symbol in exchange.symbols]
-                #    tickers = await asyncio.gather(*tickers, return_exceptions=True)
-                #    tickers = {sym["symbol"]: sym for sym in tickers}
-
-                pairs = [symbol for symbol in exchange.symbols
-                         if symbol and "/" in symbol
-                         and symbol.split("/", 1)[0] not in BLACKLISTED
-                         and symbol.split("/", 1)[1] not in BLACKLISTED]
-
-                logging.debug(f"Loading {len(pairs)} markets at {exchange}...")
-                if not exchange.hasFetchTickers \
-                        or len(pairs) <= 10 or exchange.has.get("fetchOrderBooks", False):
-                    books = [exchange.fetch_l2_order_book(symbol) for symbol in pairs]
-                    books = await asyncio.gather(*books, return_exceptions=True)
-                    books = {symbol: book for symbol, book in zip(pairs, books)}
-                else:
-                    books = await exchange.fetch_tickers()
-                    for pair in books.values():
-                        pair["bids"] = [(pair["bid"], pair["quoteVolume"]
-                                         or float(pair["info"].get("bidQty")) or float("inf"))]
-                        pair["asks"] = [(pair["ask"], pair["quoteVolume"]
-                                         or float(pair["info"].get("askQty")) or float("inf"))]
-                    print(books)
-
-                if not rates:
-                    logging.info(f"Loaded {len(books)} markets at {exchange}.")
-
-                for pair, data in books.items():
-                    coin1, coin2 = pair.split("/", 1)
-                    try:
-                        if not coin1 or not coin2 or not data["bids"] or not data["asks"]:
-                            continue
-                    except TypeError as e:
-                        # logging.warning(f"{e} when processing {pair}; data is {data}")
-                        continue
-
-                    if coin1 not in rates:
-                        rates[coin1] = {}
-
-                    if coin2 not in rates:
-                        rates[coin2] = {}
-
-                    # e.g. ETH/USD:
-                    # coin1 = ETH
-                    # coin2 = USD
-                    # The table is "from -> to", so "I have ETH and I want USD" means selling,
-                    # which means placing an order at the bid to get a fill.
-                    # Going the other way entails buying at 1 / the ask in USD.
-                    rates[coin1][coin2] = data["bids"]
-                    rates[coin2][coin1] = [(1 / ask, ask * volume) for ask, volume in data["asks"]]
+                await self.exchange_rates.populate(exchange, blacklisted=self.blacklisted)
             except (TimeoutError, RequestTimeout, ExchangeError) as e:
                 logging.error(e)
-
-            await asyncio.sleep(1)
-
-    async def simple_arbs(exchange_rates):
-        while True:
-            diffs, percentages = exchange_rates.pairwise_diffs("LTC", "USD")
-            print(diffs)
-            await asyncio.sleep(1)
-
-    async def complex_arbs(exchange_rates):
-        while True:
-            roundtrips = exchange_rates.best_roundtrips("LTC", 10, max_steps=3)
-            roundtrips = sorted(roundtrips, key=Trade.num_exchanges)
-
-            for index, best_conversion in enumerate(roundtrips):
-                profit = Trade.profitability(best_conversion)
-                if profit < ARBITRAGE_THRESHOLD_PCENT:
-                    continue
-
-                print(f"{best_conversion} for {profit * 100}% profit")
-            print()
-            await asyncio.sleep(1)
-
-    loop = asyncio.get_event_loop()
-    for exchange in EXCHANGES:
-        rates_on_exchange = {}
-        exchange_rates[exchange.name] = rates_on_exchange
-        asyncio.ensure_future(populate_with_tickers(exchange, rates_on_exchange))
-
-    # asyncio.ensure_future(simple_arbs(exchange_rates))
-    asyncio.ensure_future(complex_arbs(exchange_rates))
-    loop.run_forever()
+            await asyncio.sleep(5)
 
 
 if __name__ == "__main__":
-    main(sys.argv)
+    EXCHANGES = {
+        #        ccxt.bittrex({'enableRateLimit': True}),
+        #        ccxt.gdax({'enableRateLimit': True}),
+        #        ccxt.kraken({'enableRateLimit': True}),
+        #        ccxt.poloniex({'enableRateLimit': True}),
+        ##        ccxt.bitmex({'enableRateLimit': True}),
+        FastCryptopia({'enableRateLimit': True}),
+        #        ccxt.gemini({'enableRateLimit': True}),
+        ccxt.binance({'enableRateLimit': True})
+    }
+    start_with = ("ETH", 10)
+    arbs = Sharpshooter(EXCHANGES, start_with).run_once()
+    Sharpshooter.print_arbs(arbs)

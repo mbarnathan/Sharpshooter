@@ -25,7 +25,8 @@ class FastCryptopia(cryptopia):
         return response
 
     async def fetch_order_book(self, symbol, params={}):
-        if not self._order_books or time.time() > self._last_fetch + self.REFRESH_SECONDS:
+        # FIXME: need to keep updating periodically.
+        if not self._order_books:  # or time.time() > self._last_fetch + self.REFRESH_SECONDS:
             self._fetching.clear()
             self._order_books = self.fetch_order_books(params)
             self._order_books = await self._order_books

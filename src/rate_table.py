@@ -1,8 +1,12 @@
+import asyncio
 import collections
+import itertools
+import logging
 from collections import OrderedDict, defaultdict
 from typing import Dict, Tuple
 
-import itertools
+import json
+from ccxt import RequestTimeout, ExchangeError
 from more_itertools import nth
 
 from src.trade import Trade
@@ -15,6 +19,72 @@ class RateTable(collections.UserDict):
     }
 
     SYNONYMS.update({v: k for k, v in SYNONYMS.items()})
+
+    async def populate(self, exchange, blacklisted=None):
+        if not blacklisted:
+            blacklisted = set()
+
+        marginal = self.get(exchange.name)
+        if marginal is None:
+            logging.info(f"Initializing {exchange}...")
+            marginal = {}
+            self[exchange.name] = marginal
+            for attempt in range(5):
+                try:
+                    await exchange.load_markets()
+                    break
+                except RequestTimeout:
+                    pass
+
+        pairs = [symbol for symbol in exchange.symbols
+                 if symbol and "/" in symbol
+                 and symbol.split("/", 1)[0] not in blacklisted
+                 and symbol.split("/", 1)[1] not in blacklisted]
+
+        if not exchange.hasFetchTickers \
+                or len(pairs) <= 10 or exchange.has.get("fetchOrderBooks", False):
+            logging.debug(f"Loading {len(pairs)} markets by book at {exchange}...")
+            books = [exchange.fetch_l2_order_book(symbol) for symbol in pairs]
+            books = await asyncio.gather(*books, return_exceptions=True)
+            books = {symbol: book for symbol, book in zip(pairs, books)}
+        else:
+            logging.debug(f"Loading {len(pairs)} markets by tickers at {exchange}...")
+            tickers = await exchange.fetch_tickers()
+            books = {}
+            for pair_name in pairs:
+                pair = tickers.get(pair_name)
+                if pair:
+                    pair["bids"] = [(pair["bid"], pair["quoteVolume"] or float("inf"))]
+                    pair["asks"] = [(pair["ask"], pair["quoteVolume"] or float("inf"))]
+                    books[pair_name] = pair
+
+        logging.log(level=logging.DEBUG if marginal else logging.INFO,
+                    msg=f"Loaded {len(books)} markets at {exchange}.")
+
+        for pair, data in books.items():
+            coin1, coin2 = pair.split("/", 1)
+            try:
+                if not coin1 or not coin2 or not data["bids"] or not data["asks"]:
+                    continue
+            except TypeError as e:
+                # logging.warning(f"{e} when processing {pair}; data is {data}")
+                continue
+
+            if coin1 not in marginal:
+                marginal[coin1] = {}
+
+            if coin2 not in marginal:
+                marginal[coin2] = {}
+
+            # e.g. ETH/USD:
+            # coin1 = ETH
+            # coin2 = USD
+            # The table is "from -> to", so "I have ETH and I want USD" means selling,
+            # which means placing an order at the bid to get a fill.
+            # Going the other way entails buying at 1 / the ask in USD.
+            marginal[coin1][coin2] = [(bid, volume) for bid, volume in data["bids"] if bid > 0]
+            marginal[coin2][coin1] = [(1 / ask, ask * volume)
+                                      for ask, volume in data["asks"] if ask > 0]
 
     def get_pairs(self):
         """Returns all currency pairs in this table."""
@@ -117,10 +187,16 @@ class RateTable(collections.UserDict):
             direct_pairs = exchange.get(from_cur, {}).items()
             syn_pairs = exchange.get(RateTable.SYNONYMS.get(from_cur), {}).items()
 
+            next_len = len(direct_pairs) + len(syn_pairs)
+            logging.debug(f"On {exchange_name}, {next_len} {from_cur} pairs")
+
+            no_volume = 0
+            repeat_trades = 0
             for next_cur, book in itertools.chain(direct_pairs, syn_pairs):
                 value, limit, next_amount = self.get_market_price(book, amount)
 
                 if not value or (coins and next_cur not in coins):
+                    no_volume += 1
                     continue
 
                 next_trade = Trade(exchange_name, from_cur, next_cur, next_amount, limit, value)
@@ -129,12 +205,17 @@ class RateTable(collections.UserDict):
                 pairs = set(t.get_unique() for t in trades)
                 if pair in pairs or inv_pair in pairs:
                     # Don't repeat the same trades in a single chain.
+                    repeat_trades += 1
                     continue
 
                 solutions += self._all_conversions(
                     next_cur, to_cur, next_amount,
                     trades + [next_trade],
                     step + 1, max_steps, exchanges, coins, snapshot)
+
+            if step == 0:
+                logging.debug(f"Trading {from_cur} on {exchange_name}, {no_volume} no-volume, "
+                              f"{repeat_trades} repeats, {len(solutions)} solutions")
 
         return solutions
 
