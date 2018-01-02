@@ -5,8 +5,7 @@ import logging
 from collections import OrderedDict, defaultdict
 from typing import Dict, Tuple
 
-import json
-from ccxt import RequestTimeout, ExchangeError
+from ccxt import RequestTimeout
 from more_itertools import nth
 
 from src.trade import Trade

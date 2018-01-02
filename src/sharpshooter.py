@@ -30,7 +30,6 @@ BLACKLISTED = set([
 class Sharpshooter:
     def __init__(self, exchanges, starting_currency, blacklisted=None,
                  arbitrage_threshold_pcent=0.025):
-        logging.basicConfig(level=logging.INFO)
         self.blacklisted = blacklisted or BLACKLISTED
         self.exchange_rates = RateTable()
         self.exchanges = exchanges
@@ -49,7 +48,7 @@ class Sharpshooter:
             asyncio.gather(*[self.exchange_rates.populate(exchange, blacklisted=self.blacklisted)
                              for exchange in self.exchanges]))
         asyncio.get_event_loop().run_until_complete(populate)
-        return self.complex_arbs()
+        return list(self.complex_arbs())
 
     def simple_arbs(self, from_cur, to_cur):
         return self.exchange_rates.pairwise_diffs(from_cur, to_cur)
@@ -102,6 +101,7 @@ if __name__ == "__main__":
         #        ccxt.gemini({'enableRateLimit': True}),
         ccxt.binance({'enableRateLimit': True})
     }
+    logging.basicConfig(level=logging.INFO)
     start_with = ("ETH", 10)
     arbs = Sharpshooter(EXCHANGES, start_with).run_once()
     Sharpshooter.print_arbs(arbs)
