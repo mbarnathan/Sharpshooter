@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import sys
 
 import ccxt.async as ccxt
 from ccxt import RequestTimeout, ExchangeError
@@ -92,14 +91,13 @@ class Sharpshooter:
 
 if __name__ == "__main__":
     EXCHANGES = {
-                ccxt.bittrex({'enableRateLimit': True}),
-        #        ccxt.gdax({'enableRateLimit': True}),
-        #        ccxt.kraken({'enableRateLimit': True}),
-        #        ccxt.poloniex({'enableRateLimit': True}),
-        ##        ccxt.bitmex({'enableRateLimit': True}),
-        #FastCryptopia({'enableRateLimit': True}),
-        #        ccxt.gemini({'enableRateLimit': True}),
-        # ccxt.kucoin({'enableRateLimit': True}),
+        ccxt.bittrex({'enableRateLimit': True}),
+        ccxt.gdax({'enableRateLimit': True}),
+        ccxt.kraken({'enableRateLimit': True}),
+        ccxt.poloniex({'enableRateLimit': True}),
+        FastCryptopia({'enableRateLimit': True}),
+        ccxt.gemini({'enableRateLimit': True}),
+        ccxt.kucoin({'enableRateLimit': True}),
         ccxt.binance({'enableRateLimit': True})
     }
     logging.basicConfig(level=logging.INFO)
