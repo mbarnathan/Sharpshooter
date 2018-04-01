@@ -13,4 +13,4 @@ If you'd like to use this code in a closed-source product, contact me for an alt
 
 This codebase liberally uses async/await, so you'll need at least Python 3.5 to run it.
 
-By default, the code assumes you're starting with 10 ETH. This can be changed at the bottom of sharpshooter.py.
+By default, the code assumes you're starting with 10 ETH. This can be changed at the bottom of sharpshooter.py. You may also want to modify the list of exchanges to suit your taste.
