@@ -9,7 +9,10 @@ If you'd like to use this code in a closed-source product, contact me for an alt
 
 ## To run:
 
-```python3 sharpshooter.py```
+```
+pip3 install ccxt
+python3 sharpshooter.py
+```
 
 This codebase liberally uses async/await, so you'll need at least Python 3.5 to run it.
 
