@@ -40,22 +40,27 @@ class RateTable(collections.UserDict):
                  and symbol.split("/", 1)[0] not in blacklisted
                  and symbol.split("/", 1)[1] not in blacklisted]
 
-        if not exchange.hasFetchTickers \
-                or len(pairs) <= 10 or exchange.has.get("fetchOrderBooks", False):
-            logging.debug(f"Loading {len(pairs)} markets by book at {exchange}...")
-            books = [exchange.fetch_l2_order_book(symbol) for symbol in pairs]
-            books = await asyncio.gather(*books, return_exceptions=True)
-            books = {symbol: book for symbol, book in zip(pairs, books)}
-        else:
-            logging.debug(f"Loading {len(pairs)} markets by tickers at {exchange}...")
-            tickers = await exchange.fetch_tickers()
-            books = {}
-            for pair_name in pairs:
-                pair = tickers.get(pair_name)
-                if pair:
-                    pair["bids"] = [(pair["bid"], pair["quoteVolume"] or float("inf"))]
-                    pair["asks"] = [(pair["ask"], pair["quoteVolume"] or float("inf"))]
-                    books[pair_name] = pair
+        for attempt in range(5):
+            try:
+                if not exchange.hasFetchTickers \
+                        or len(pairs) <= 10 or exchange.has.get("fetchOrderBooks", False):
+                    logging.debug(f"Loading {len(pairs)} markets by book at {exchange}...")
+                    books = [exchange.fetch_l2_order_book(symbol) for symbol in pairs]
+                    books = await asyncio.gather(*books, return_exceptions=True)
+                    books = {symbol: book for symbol, book in zip(pairs, books)}
+                else:
+                    logging.debug(f"Loading {len(pairs)} markets by tickers at {exchange}...")
+                    tickers = await exchange.fetch_tickers()
+                    books = {}
+                    for pair_name in pairs:
+                        pair = tickers.get(pair_name)
+                        if pair:
+                            pair["bids"] = [(pair["bid"], pair["quoteVolume"] or float("inf"))]
+                            pair["asks"] = [(pair["ask"], pair["quoteVolume"] or float("inf"))]
+                            books[pair_name] = pair
+                break
+            except (TimeoutError, RequestTimeout):
+                logging.warning("Timeout while requesting tickers from {exchange.name}")
 
         logging.log(level=logging.DEBUG if marginal else logging.INFO,
                     msg=f"Loaded {len(books)} markets at {exchange}.")
@@ -81,9 +86,10 @@ class RateTable(collections.UserDict):
             # The table is "from -> to", so "I have ETH and I want USD" means selling,
             # which means placing an order at the bid to get a fill.
             # Going the other way entails buying at 1 / the ask in USD.
-            marginal[coin1][coin2] = [(bid, volume) for bid, volume in data["bids"] if bid > 0]
+            marginal[coin1][coin2] = [(bid, volume) for bid, volume in data["bids"]
+                                      if bid and bid > 0]
             marginal[coin2][coin1] = [(1 / ask, ask * volume)
-                                      for ask, volume in data["asks"] if ask > 0]
+                                      for ask, volume in data["asks"] if ask and ask > 0]
 
     def get_pairs(self):
         """Returns all currency pairs in this table."""
